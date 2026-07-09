@@ -171,6 +171,12 @@
     border-radius:10px; padding:12px 14px; margin-bottom:7px; font-size:14.5px;}
   .item .txt{flex:1; line-height:1.4;}
   .item .del{color:var(--dim); background:none; border:none; font-size:16px; cursor:pointer; padding:2px 6px;}
+  .item.todo{cursor:pointer;}
+  .item.todo .tbox{width:20px; height:20px; border:1.5px solid var(--dim); border-radius:6px; flex:none;
+    display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--bg);}
+  .item.todo.done{opacity:.55;}
+  .item.todo.done .tbox{background:var(--brass); border-color:var(--brass);}
+  .item.todo.done .txt{text-decoration:line-through; color:var(--mut);}
   .adder{display:flex; gap:8px; margin:2px 0 6px;}
   .adder input{flex:1; background:var(--panel2); border:1px solid var(--line); border-radius:10px;
     color:var(--ink); font:inherit; font-size:14px; padding:11px 13px;}
@@ -196,6 +202,11 @@
 <div class="sec on" id="sec-today">
   <h2>Build</h2>
   <div id="buildList"></div>
+  <div id="weeklySec">
+    <h2>Weekly</h2>
+    <p class="note">Counts reset every Monday. Tap to log today toward the week's target.</p>
+    <div id="weeklyList"></div>
+  </div>
   <h2>Hold the line</h2>
   <p class="note">Tap when it happens. Goal is zero &mdash; honest logging beats a clean-looking chart. Tap the counter badge to review today's entries without logging.</p>
   <div id="avoidList"></div>
@@ -205,8 +216,9 @@
   <div class="habitAdder">
     <div class="adder"><input id="in-habit" placeholder="New habit name..."></div>
     <div class="rowtools">
-      <button class="ghost" data-htype="build">+ Add to Build</button>
-      <button class="ghost" data-htype="avoid">+ Add to Hold the line</button>
+      <button class="ghost" data-htype="build">+ Build</button>
+      <button class="ghost" data-htype="weekly">+ Weekly</button>
+      <button class="ghost" data-htype="avoid">+ Hold the line</button>
     </div>
   </div>
 </div>
@@ -229,6 +241,17 @@
     font-size:12px; line-height:1.5; padding:10px 12px; min-height:160px;" readonly></textarea>
   <h2>Notes in this period</h2>
   <div class="loglist" id="notesLog"></div>
+</div>
+
+<!-- TASKS -->
+<div class="sec" id="sec-tasks">
+  <h2>To do</h2>
+  <p class="note">One-off tasks. Tap to mark done, tap the cross to remove. Done items sink to the bottom.</p>
+  <div id="todoList"></div>
+  <div class="adder"><input id="in-todo" placeholder="Add a task..."><button id="todoAdd">Add</button></div>
+  <div class="rowtools" id="todoClearWrap" style="display:none">
+    <button class="ghost" id="todoClear">Clear completed</button>
+  </div>
 </div>
 
 <!-- COMPASS -->
@@ -255,6 +278,7 @@
 <div class="tabs">
   <button class="tabbtn on" data-tab="today">Today</button>
   <button class="tabbtn" data-tab="week">Week</button>
+  <button class="tabbtn" data-tab="tasks">Tasks</button>
   <button class="tabbtn" data-tab="compass">Compass</button>
 </div>
 
@@ -286,12 +310,27 @@ const DEFAULTS={
     {id:'b13',type:'build',name:"Tomorrow's dress"},
     {id:'b14',type:'build',name:'Teeth 2'},
     {id:'b15',type:'build',name:'Bed by 11'},
+    {id:'w01',type:'weekly',name:'Instagram content',target:1},
+    {id:'w02',type:'weekly',name:'Modelling',target:1},
+    {id:'w03',type:'weekly',name:'Shopping',target:1},
+    {id:'w04',type:'weekly',name:'Body Grooming',target:1},
+    {id:'w05',type:'weekly',name:'Cold Approach',target:1},
     {id:'a01',type:'avoid',name:'Binge Social Media'},
     {id:'a02',type:'avoid',name:'Junk High Calorie Food'},
     {id:'a03',type:'avoid',name:'FAP'}
   ],
   log:{}, events:{'2026-07-08':{'a03':[{t:'',note:''}]}}, notes:{},
-  lists:{agenda:[],hobbies:[],development:[],explore:[]}
+  todos:[],
+  lists:{
+    agenda:[
+      'Sharp / Enthusiastic / Expert',
+      'Calm / Fun / Mild Reactions / Speak Less',
+      "Don't Promise / Don't Share / Don't Recommend"
+    ],
+    hobbies:['VK / Russian Instagram Content & Presence'],
+    development:['B12. Vitamin D. Magnesium. Dermovate. Omega 3.','Champix'],
+    explore:['Survey Idea','Coin ICO','Arbitrage / HFT / Leverage Trading','Claud CRM / Systems / Apps']
+  }
 };
 
 /* storage adapter: Claude artifact storage when available, browser storage in a downloaded copy */
@@ -332,6 +371,7 @@ async function load(){
   if(!S.lists) S.lists={agenda:[],hobbies:[],development:[],explore:[]};
   if(!S.notes) S.notes={};
   if(!S.events) S.events={};
+  if(!S.todos) S.todos=[];
   render();
   selfTest();
 }
@@ -367,6 +407,21 @@ function cleanDays(hid){
   return Math.round((b-a)/86400000);
 }
 
+function mondayOf(d){
+  const x=new Date(d); x.setHours(0,0,0,0);
+  x.setDate(x.getDate()-((x.getDay()+6)%7));
+  return x;
+}
+function weekCount(hid){
+  const m=mondayOf(new Date()); const now=new Date(); let c=0;
+  for(let i=0;i<7;i++){
+    const d=new Date(m); d.setDate(m.getDate()+i);
+    if(d>now)break;
+    if((S.log[dayKey(d)]||{})[hid])c++;
+  }
+  return c;
+}
+
 function render(){
   const t=todayKey(); const log=S.log[t]||{};
   const d=new Date();
@@ -380,24 +435,35 @@ function render(){
     done+' of '+builds.length+' built'+SEP+(slipsToday===0?'line held so far':slipsToday+' slip'+(slipsToday>1?'s':'')+' logged');
   document.getElementById('meterBar').style.width=(builds.length?Math.round(done/builds.length*100):0)+'%';
 
-  renderBuild(t,log);
+  renderCheck(t,log,'build','buildList');
+  const hasWeekly=S.habits.some(h=>h.type==='weekly');
+  document.getElementById('weeklySec').style.display=
+    (hasWeekly||document.body.classList.contains('editing'))?'block':'none';
+  renderCheck(t,log,'weekly','weeklyList');
   renderAvoid(t);
-  renderWeek(); renderLists();
+  renderWeek(); renderLists(); renderTodos();
 }
 
-function renderBuild(t,log){
+function renderCheck(t,log,type,elId){
   const editing=document.body.classList.contains('editing');
-  const el=document.getElementById('buildList'); el.innerHTML='';
-  S.habits.filter(h=>h.type==='build').forEach(h=>{
+  const el=document.getElementById(elId); el.innerHTML='';
+  S.habits.filter(h=>h.type===type).forEach(h=>{
     const note=(S.notes[t]||{})[h.id]||'';
     const w=document.createElement('div'); w.className='hwrap'+(editing||openPanel===h.id?' open':'');
     if(h.color) w.style.setProperty('--hc',h.color);
     const b=document.createElement(editing?'div':'button');
     b.className='habit'+(log[h.id]?' done':'');
     if(!editing) b.setAttribute('aria-pressed',!!log[h.id]);
-    const sk=streak(h.id);
+    let lbl,lblCls='';
+    if(type==='build'){
+      const sk=streak(h.id); lbl=(sk>0?sk+'d':'');
+    }else{
+      const wc=weekCount(h.id), tgt=h.target||1;
+      lbl=wc+'/'+tgt+' wk';
+      if(wc>=tgt) lblCls=' clean';
+    }
     b.innerHTML='<span class="box">'+(log[h.id]?CHECK:'')+'</span><span class="hname">'+esc(h.name)+'</span>'+
-      '<span class="streak">'+(sk>0?sk+'d':'')+'</span>'+
+      '<span class="streak'+lblCls+'">'+lbl+'</span>'+
       '<span class="noteBtn'+(note?' has':'')+'" role="button" aria-label="Add note">'+PEN+'</span>'+
       '<span class="del" role="button" aria-label="Delete habit">'+CROSS+'</span>';
     if(editing) attachRename(b,h);
@@ -524,6 +590,20 @@ function buildEditPanel(h){
   const dn=document.createElement('button'); dn.className='mv'; dn.textContent=DOWN;
   dn.setAttribute('aria-label','Move down'); dn.onclick=()=>moveHabit(h,1);
   p.appendChild(up); p.appendChild(dn);
+  if(h.type==='weekly'){
+    const step=document.createElement('div');
+    step.style.cssText='display:flex;align-items:center;gap:6px;margin-left:4px;';
+    const mk=(txt,d)=>{
+      const btn=document.createElement('button'); btn.className='mv'; btn.textContent=txt;
+      btn.onclick=()=>{ h.target=Math.max(1,Math.min(7,(h.target||1)+d)); save(); render(); };
+      return btn;
+    };
+    const lbl=document.createElement('span');
+    lbl.style.cssText='font-size:11px;color:var(--mut);white-space:nowrap;';
+    lbl.textContent=(h.target||1)+'/wk';
+    step.appendChild(mk('-',-1)); step.appendChild(lbl); step.appendChild(mk('+',1));
+    p.appendChild(step);
+  }
   const sws=document.createElement('div'); sws.className='swatches';
   const cur=h.color||PALETTE[0];
   PALETTE.forEach(col=>{
@@ -572,11 +652,13 @@ function renderWeek(){
       const k=dayKey(d);
       const n=(S.notes[k]||{})[h.id];
       let cellCls='', content='';
-      if(h.type==='build'){
-        const y=(S.log[k]||{})[h.id]; if(y){hits++; cellCls=' y';} slots++;
-      }else{
+      if(h.type==='avoid'){
         const c=evs(k,h.id).length;
         if(c){ slips+=c; cellCls=' slip'; content=c; }
+      }else{
+        const y=(S.log[k]||{})[h.id];
+        if(h.type==='build'){ slots++; if(y)hits++; }
+        if(y) cellCls=' y';
       }
       return '<button class="cell'+cellCls+(n?' n':'')+(k===tk?' today':'')+
         '" data-h="'+h.id+'" data-d="'+k+'" aria-label="'+esc(h.name)+', '+k+'">'+content+'</button>';
@@ -598,7 +680,7 @@ function renderNotesLog(){
     S.habits.forEach(h=>{
       const dn=(S.notes[k]||{})[h.id];
       if(dn){
-        const done=h.type==='build'?(S.log[k]||{})[h.id]:!evs(k,h.id).length;
+        const done=h.type==='avoid'?!evs(k,h.id).length:(S.log[k]||{})[h.id];
         rows.push({d,h,txt:dn,cls:done?'hit':'miss'});
       }
       if(h.type==='avoid'){
@@ -631,11 +713,11 @@ document.getElementById('weekGrid').addEventListener('click',e=>{
   const det=document.getElementById('cellDetail');
   det.className='detail on'; det.innerHTML='';
   let status;
-  if(h.type==='build'){
-    status=(S.log[k]||{})[h.id]?CHECK+' done':CROSS+' not ticked';
-  }else{
+  if(h.type==='avoid'){
     const c2=evs(k,h.id).length;
     status=c2?c2+' logged':'clean';
+  }else{
+    status=(S.log[k]||{})[h.id]?CHECK+' done':CROSS+' not ticked';
   }
   const head=document.createElement('div'); head.className='dhead';
   head.textContent=dd.toLocaleDateString('en-GB',{weekday:'short',day:'numeric',month:'short'})+SEP+h.name+SEP+status;
@@ -690,6 +772,14 @@ document.getElementById('exportBtn').onclick=()=>{
       });
     });
   });
+  const weeklies=S.habits.filter(h=>h.type==='weekly');
+  if(weeklies.length){
+    lines.push('','WEEKLY:');
+    weeklies.forEach(h=>{
+      let c=0; days.forEach(d=>{ if((S.log[dayKey(d)]||{})[h.id]) c++; });
+      lines.push('- '+h.name+': this week '+weekCount(h.id)+'/'+(h.target||1)+'; '+c+' total in '+range+' days');
+    });
+  }
   const noteLines=[];
   days.forEach(d=>{
     const k=dayKey(d);
@@ -699,6 +789,11 @@ document.getElementById('exportBtn').onclick=()=>{
     });
   });
   if(noteLines.length){ lines.push('','NOTES:'); lines.push.apply(lines,noteLines); }
+  const open=S.todos.filter(t=>!t.done);
+  if(open.length){
+    lines.push('','TO DO (open):');
+    open.forEach(t=>lines.push('- '+t.txt));
+  }
   const out=document.getElementById('exportOut');
   out.style.display='block'; out.value=lines.join('\n');
   out.focus(); out.select();
@@ -706,6 +801,35 @@ document.getElementById('exportBtn').onclick=()=>{
 };
 
 /* ---- compass ---- */
+function renderTodos(){
+  const el=document.getElementById('todoList'); el.innerHTML='';
+  const sorted=[...S.todos].sort((a,b)=>(a.done?1:0)-(b.done?1:0));
+  sorted.forEach(td=>{
+    const d=document.createElement('div'); d.className='item todo'+(td.done?' done':'');
+    d.innerHTML='<span class="tbox">'+(td.done?CHECK:'')+'</span><span class="txt">'+esc(td.txt)+'</span>'+
+      '<button class="del" aria-label="Remove">'+CROSS+'</button>';
+    d.onclick=e=>{
+      if(e.target.classList.contains('del')){
+        S.todos=S.todos.filter(x=>x!==td); save(); renderTodos(); return;
+      }
+      td.done=!td.done; save(); renderTodos();
+    };
+    el.appendChild(d);
+  });
+  document.getElementById('todoClearWrap').style.display=
+    S.todos.some(t=>t.done)?'flex':'none';
+}
+document.getElementById('todoAdd').onclick=()=>{
+  const inp=document.getElementById('in-todo'); const v=inp.value.trim(); if(!v)return;
+  S.todos.push({id:uid(),txt:v,done:false}); inp.value=''; save(); renderTodos();
+};
+document.getElementById('in-todo').addEventListener('keydown',e=>{
+  if(e.key==='Enter')document.getElementById('todoAdd').onclick();
+});
+document.getElementById('todoClear').onclick=()=>{
+  S.todos=S.todos.filter(t=>!t.done); save(); renderTodos();
+};
+
 function renderLists(){
   for(const k of ['agenda','hobbies','development','explore']){
     const el=document.getElementById('list-'+k); el.innerHTML='';
@@ -735,7 +859,9 @@ document.getElementById('editBtn').onclick=()=>{
 document.querySelectorAll('[data-htype]').forEach(btn=>btn.onclick=()=>{
   const inp=document.getElementById('in-habit');
   const v=inp.value.trim(); if(!v)return;
-  S.habits.push({id:uid(),type:btn.dataset.htype,name:v});
+  const h={id:uid(),type:btn.dataset.htype,name:v};
+  if(h.type==='weekly') h.target=1;
+  S.habits.push(h);
   inp.value=''; save(); render();
 });
 
